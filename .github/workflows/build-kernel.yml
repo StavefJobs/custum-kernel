@@ -196,48 +196,35 @@ jobs:
 
             ### Notes
             Custom kernel compiled from kernel.org source with ${{ inputs.config_type }} configuration.
+          files: |
+            linux-${{ inputs.kernel_version }}/vmlinux
+            linux-${{ inputs.kernel_version }}/.config
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload artifacts
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: linux-${{ inputs.kernel_version }}/vmlinux
-          asset_name: vmlinux-${{ inputs.config_type }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload config
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: linux-${{ inputs.kernel_version }}/.config
-          asset_name: config-${{ inputs.config_type }}
-          asset_content_type: text/plain
-
       - name: Upload bzImage (x86)
-        if: inputs.config_type != 'embedded' && hashFiles('linux-**/arch/x86/boot/bzImage')
-        uses: actions/upload-release-asset@v1
+        if: inputs.config_type != 'embedded' && inputs.config_type != 'riscv'
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: linux-${{ inputs.kernel_version }}/arch/x86/boot/bzImage
-          asset_name: bzImage-${{ inputs.config_type }}
-          asset_content_type: application/octet-stream
+          tag_name: v${{ inputs.kernel_version }}.0-${{ inputs.config_type }}
+          files: linux-${{ inputs.kernel_version }}/arch/x86/boot/bzImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload ARM64 Image
-        if: inputs.config_type == 'embedded' && hashFiles('linux-**/arch/arm64/boot/Image')
-        uses: actions/upload-release-asset@v1
+        if: inputs.config_type == 'embedded'
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: linux-${{ inputs.kernel_version }}/arch/arm64/boot/Image
-          asset_name: Image-${{ inputs.config_type }}
-          asset_content_type: application/octet-stream
+          tag_name: v${{ inputs.kernel_version }}.0-${{ inputs.config_type }}
+          files: linux-${{ inputs.kernel_version }}/arch/arm64/boot/Image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload RISC-V Image
-        if: inputs.config_type == 'riscv' && hashFiles('linux-**/arch/riscv/boot/Image')
-        uses: actions/upload-release-asset@v1
+        if: inputs.config_type == 'riscv'
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: linux-${{ inputs.kernel_version }}/arch/riscv/boot/Image
-          asset_name: Image-${{ inputs.config_type }}
-          asset_content_type: application/octet-stream
+          tag_name: v${{ inputs.kernel_version }}.0-${{ inputs.config_type }}
+          files: linux-${{ inputs.kernel_version }}/arch/riscv/boot/Image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
