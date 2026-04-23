@@ -10,6 +10,7 @@ on:
           - server
           - virt
           - embedded
+          - riscv
       kernel_version:
         type: string
         description: 'Kernel Version (e.g., 7.0.1)'
@@ -64,6 +65,11 @@ jobs:
             cpio \
             rsync
 
+      - name: Install RISC-V cross-compiler
+        if: inputs.config_type == 'riscv'
+        run: |
+          sudo apt-get install -y gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
       - name: Build kernel (server/virt)
         if: inputs.config_type == 'server' || inputs.config_type == 'virt'
         run: |
@@ -75,6 +81,12 @@ jobs:
         run: |
           cd linux-${{ inputs.kernel_version }}
           make -j$(nproc) KALLSYMS_ENABLED=1 Image
+
+      - name: Build kernel (riscv - RISC-V)
+        if: inputs.config_type == 'riscv'
+        run: |
+          cd linux-${{ inputs.kernel_version }}
+          make -j$(nproc) KALLSYMS_ENABLED=1 CROSS_COMPILE=riscv64-linux-gnu- Image
 
       - name: Build modules
         run: |
@@ -94,6 +106,8 @@ jobs:
           # Determine kernel image based on config
           if [ "${{ inputs.config_type }}" = "embedded" ]; then
             KERNEL_IMAGE="arch/arm64/boot/Image"
+          elif [ "${{ inputs.config_type }}" = "riscv" ]; then
+            KERNEL_IMAGE="arch/riscv/boot/Image"
           else
             KERNEL_IMAGE="vmlinux"
             if [ -f "arch/x86/boot/bzImage" ]; then
@@ -136,6 +150,9 @@ jobs:
           if [ "${{ inputs.config_type }}" = "embedded" ]; then
             mkdir -p deb-pkg/boot
             cp arch/arm64/boot/Image deb-pkg/boot/vmlinuz-${{ inputs.kernel_version }}-${{ inputs.config_type }}
+          elif [ "${{ inputs.config_type }}" = "riscv" ]; then
+            mkdir -p deb-pkg/boot
+            cp arch/riscv/boot/Image deb-pkg/boot/vmlinuz-${{ inputs.kernel_version }}-${{ inputs.config_type }}
           else
             mkdir -p deb-pkg/boot
             if [ -f "arch/x86/boot/bzImage" ]; then
@@ -166,7 +183,7 @@ jobs:
             ## Custom Kernel Build
 
             **Version:** ${{ inputs.kernel_version }}-${{ inputs.config_type }}
-            **Architecture:** ${{ inputs.config_type == 'embedded' && 'ARM64' || 'x86_64' }}
+            **Architecture:** ${{ inputs.config_type == 'embedded' && 'ARM64' || inputs.config_type == 'riscv' && 'RISC-V' || 'x86_64' }}
             **Build Date:** ${{ github.run_id }}
 
             ### Files
@@ -209,5 +226,14 @@ jobs:
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: linux-${{ inputs.kernel_version }}/arch/arm64/boot/Image
+          asset_name: Image-${{ inputs.config_type }}
+          asset_content_type: application/octet-stream
+
+      - name: Upload RISC-V Image
+        if: inputs.config_type == 'riscv' && hashFiles('linux-**/arch/riscv/boot/Image')
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: linux-${{ inputs.kernel_version }}/arch/riscv/boot/Image
           asset_name: Image-${{ inputs.config_type }}
           asset_content_type: application/octet-stream
