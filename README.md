@@ -13,7 +13,7 @@
 | `server` | x86_64 | 高性能服务器、网络、高并发 |
 | `virt` | x86_64 | KVM/Xen 虚拟化、PCI 穿透 |
 | `embedded` | ARM64 (aarch64) | 嵌入式设备、开发板 |
-| `riscv` | RISC-V | RISC-V 架构开发板、嵌入式 |
+| `riscv` | RISC-V (rv64) | RISC-V 架构开发板、嵌入式 |
 
 ## 功能特性
 
@@ -47,13 +47,25 @@
 
 ### GitHub Actions 工作流
 
-自动化构建流程：
+支持两种构建模式：
 
-1. 下载 kernel.org 官方源码
-2. 应用自定义配置
-3. 编译内核镜像
-4. 编译内核模块
-5. 生成 Release 并上传产物
+#### 模式一：全部编译 (build_all: true)
+一次性编译所有 4 种配置：
+- server (x86_64)
+- virt (x86_64)
+- embedded (ARM64)
+- riscv (RISC-V)
+
+#### 模式二：单独编译 (build_all: false)
+只编译选定的单一配置
+
+### 自动化流程
+
+1. 安装构建依赖（包含 RISC-V 和 ARM64 交叉编译器）
+2. 下载 kernel.org 官方源码
+3. 循环编译 4 种配置（每次编译前执行 make clean）
+4. 打包内核为 tar.gz
+5. 生成 Release 并上传所有产物
 
 ## 使用方法
 
@@ -63,31 +75,47 @@
 2. 点击 **Build Custom Kernel**
 3. 点击 **Run workflow**
 4. 填写参数：
-   - **Configuration Type**: 选择 server/virt/embedded/riscv
    - **Kernel Version**: 内核版本（如 7.0.1）
+   - **Build All**: 是否编译全部 4 种配置
+     - `true`: 编译所有配置
+     - `false`: 只编译单个配置
+   - **Config Type**: 选择 server/virt/embedded/riscv（仅当 build_all 为 false 时）
 5. 点击 **Run workflow**
 
 ### 2. 构建产物
 
-编译完成后会自动创建 Release，包含：
+编译完成后会自动创建 Release，包含 tar.gz 压缩包：
 
 | 文件 | 说明 |
 |------|------|
-| `vmlinux` | ELF 内核镜像（x86_64） |
-| `bzImage` | x86 压缩启动镜像 |
-| `Image` | ARM64/RISC-V 压缩镜像 |
-| `.config` | 内核配置文件 |
+| `kernel-{version}-server-x86_64.tar.gz` | x86_64 服务器内核 |
+| `kernel-{version}-virt-x86_64.tar.gz` | x86_64 虚拟化内核 |
+| `kernel-{version}-embedded-arm64.tar.gz` | ARM64 嵌入式内核 |
+| `kernel-{version}-riscv-rv64.tar.gz` | RISC-V 内核 |
+
+### tar.gz 包内容
+
+```
+kernel-{version}-{config}-{arch}.tar.gz
+├── boot/
+│   ├── vmlinux          # ELF 内核镜像 (x86_64)
+│   ├── bzImage          # 压缩启动镜像 (x86_64)
+│   ├── vmlinuz          # 压缩启动镜像 (ARM64/RISC-V)
+│   └── config           # 内核配置文件
+└── modules/
+    └── {version}-{config}/  # 内核模块
+```
 
 ### 3. 安装内核
 
 ```bash
-# 安装 DEB 包
-sudo dpkg -i linux-kernel-*.deb
+# 解压内核包
+tar -xzf kernel-7.0.1-server-x86_64.tar.gz
 
-# 或手动安装
-sudo cp vmlinux /boot/vmlinuz-$(uname -r)
-sudo cp .config /boot/config-$(uname -r)
-sudo cp -r modules/lib/modules/* /lib/modules/
+# 安装内核
+sudo cp server-x86_64/boot/vmlinux /boot/
+sudo cp server-x86_64/boot/config /boot/config-$(uname -r)
+sudo cp -r server-x86_64/modules/lib/modules/* /lib/modules/
 sudo update-grub
 ```
 
@@ -95,6 +123,10 @@ sudo update-grub
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| v7.0.1.6 | 2026-04-23 | 简化 workflow，修复语法错误 |
+| v7.0.1.5 | 2026-04-23 | 修复 release asset 上传问题 |
+| v7.0.1.4 | 2026-04-23 | 修复打包命令 |
+| v7.0.1.3 | 2026-04-23 | 添加完整 README 文档 |
 | v7.0.1.2 | 2026-04-23 | Release 添加许可证说明 |
 | v7.0.1.1 | 2026-04-23 | 添加 RISC-V 配置支持 |
 | v7.0.1.0 | 2026-04-23 | 初始版本：server/virt/embedded 配置 |
