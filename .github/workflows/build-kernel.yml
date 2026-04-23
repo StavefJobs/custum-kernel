@@ -131,7 +131,7 @@ jobs:
           cd linux-${{ inputs.kernel_version }}
 
           # Install required packages for packaging
-          sudo apt-get install -y packaging.deb fakeroot
+          sudo dpkg -i packaging.deb && sudo apt -f install -y
 
           # Create deb package metadata
           mkdir -p deb-pkg/DEBIAN
