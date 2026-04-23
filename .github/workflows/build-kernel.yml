@@ -190,6 +190,10 @@ jobs:
             - `vmlinux` - Kernel ELF image
             - `.config` - Kernel configuration
 
+            ### License
+            - **Configuration files**: MIT License
+            - **Compiled kernel**: GPLv2 (same as Linux kernel)
+
             ### Notes
             Custom kernel compiled from kernel.org source with ${{ inputs.config_type }} configuration.
         env:
