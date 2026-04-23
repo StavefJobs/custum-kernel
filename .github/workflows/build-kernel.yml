@@ -3,21 +3,199 @@ name: Build Custom Kernel
 on:
   workflow_dispatch:
     inputs:
+      kernel_version:
+        type: string
+        description: 'Kernel Version (e.g., 7.0.1)'
+        default: '7.0.1'
+      build_all:
+        type: boolean
+        description: 'Build all 4 configurations (server/virt/embedded/riscv)'
+        default: true
       config_type:
         type: choice
-        description: 'Configuration Type'
+        description: 'Configuration Type (used when build_all is false)'
         options:
           - server
           - virt
           - embedded
           - riscv
-      kernel_version:
-        type: string
-        description: 'Kernel Version (e.g., 7.0.1)'
-        default: '7.0.1'
 
 jobs:
-  build:
+  build-all:
+    if: inputs.build_all
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Display build info
+        run: |
+          echo "Building all kernel configurations for version ${{ inputs.kernel_version }}"
+          echo "Configurations: server, virt, embedded, riscv"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libelf-dev \
+            libssl-dev \
+            libncurses-dev \
+            xz-utils \
+            kmod \
+            cpio \
+            rsync \
+            gcc-riscv64-linux-gnu \
+            binutils-riscv64-linux-gnu \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+
+      - name: Download kernel source
+        run: |
+          wget -q https://kernel.org/pub/linux/kernel/v7.x/linux-${{ inputs.kernel_version }}.tar.xz
+          tar -xf linux-${{ inputs.kernel_version }}.tar.xz
+
+      - name: Build all configurations
+        run: |
+          cd linux-${{ inputs.kernel_version }}
+          
+          # ============================================
+          # 1. Build server (x86_64)
+          # ============================================
+          echo "=== Building server (x86_64) ==="
+          cp ../configs/config-server.yml .config
+          make KCONFIG_CONFIG=.config olddefconfig
+          make -j$(nproc) KALLSYMS_ENABLED=1
+          
+          # Package server
+          mkdir -p ../output/server-x86_64/boot
+          cp vmlinux ../output/server-x86_64/boot/
+          [ -f arch/x86/boot/bzImage ] && cp arch/x86/boot/bzImage ../output/server-x86_64/boot/
+          cp .config ../output/server-x86_64/boot/config
+          make modules -j$(nproc)
+          make modules_install INSTALL_MOD_PATH=../modules-server
+          cp -r ../modules-server/lib/modules ../output/server-x86_64/
+          rm -rf ../modules-server
+          
+          # Package as tar.gz
+          cd ../output
+          tar -czvf kernel-${{ inputs.kernel_version }}-server-x86_64.tar.gz server-x86_64/
+          cd ../linux-${{ inputs.kernel_version }}
+          
+          # ============================================
+          # 2. Build virt (x86_64)
+          # ============================================
+          echo "=== Building virt (x86_64) ==="
+          cp ../configs/config-virt.yml .config
+          make KCONFIG_CONFIG=.config olddefconfig
+          make -j$(nproc) KALLSYMS_ENABLED=1
+          
+          # Package virt
+          mkdir -p ../output/virt-x86_64/boot
+          cp vmlinux ../output/virt-x86_64/boot/
+          [ -f arch/x86/boot/bzImage ] && cp arch/x86/boot/bzImage ../output/virt-x86_64/boot/
+          cp .config ../output/virt-x86_64/boot/config
+          make modules -j$(nproc)
+          make modules_install INSTALL_MOD_PATH=../modules-virt
+          cp -r ../modules-virt/lib/modules ../output/virt-x86_64/
+          rm -rf ../modules-virt
+          
+          # Package as tar.gz
+          cd ../output
+          tar -czvf kernel-${{ inputs.kernel_version }}-virt-x86_64.tar.gz virt-x86_64/
+          cd ../linux-${{ inputs.kernel_version }}
+          
+          # ============================================
+          # 3. Build embedded (ARM64)
+          # ============================================
+          echo "=== Building embedded (ARM64) ==="
+          cp ../configs/config-embedded.yml .config
+          make KCONFIG_CONFIG=.config olddefconfig
+          make -j$(nproc) KALLSYMS_ENABLED=1 Image
+          
+          # Package embedded
+          mkdir -p ../output/embedded-arm64/boot
+          cp arch/arm64/boot/Image ../output/embedded-arm64/boot/vmlinuz
+          cp .config ../output/embedded-arm64/boot/config
+          make modules -j$(nproc)
+          make modules_install INSTALL_MOD_PATH=../modules-embedded
+          cp -r ../modules-embedded/lib/modules ../output/embedded-arm64/
+          rm -rf ../modules-embedded
+          
+          # Package as tar.gz
+          cd ../output
+          tar -czvf kernel-${{ inputs.kernel_version }}-embedded-arm64.tar.gz embedded-arm64/
+          cd ../linux-${{ inputs.kernel_version }}
+          
+          # ============================================
+          # 4. Build riscv (RISC-V)
+          # ============================================
+          echo "=== Building riscv (RISC-V) ==="
+          cp ../configs/config-riscv.yml .config
+          make KCONFIG_CONFIG=.config olddefconfig
+          make -j$(nproc) KALLSYMS_ENABLED=1 CROSS_COMPILE=riscv64-linux-gnu- Image
+          
+          # Package riscv
+          mkdir -p ../output/riscv-rv64/boot
+          cp arch/riscv/boot/Image ../output/riscv-rv64/boot/vmlinuz
+          cp .config ../output/riscv-rv64/boot/config
+          make modules -j$(nproc)
+          CROSS_COMPILE=riscv64-linux-gnu- make modules_install INSTALL_MOD_PATH=../modules-riscv
+          cp -r ../modules-riscv/lib/modules ../output/riscv-rv64/
+          rm -rf ../modules-riscv
+          
+          # Package as tar.gz
+          cd ../output
+          tar -czvf kernel-${{ inputs.kernel_version }}-riscv-rv64.tar.gz riscv-rv64/
+          cd ..
+          
+          echo "=== All builds complete ==="
+          ls -la output/*.tar.gz
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.kernel_version }}.0
+          name: Kernel v${{ inputs.kernel_version }}.0 (All Configurations)
+          body: |
+            ## Custom Kernel Build - All Configurations
+
+            **Version:** ${{ inputs.kernel_version }}
+            **Build Date:** ${{ github.run_id }}
+
+            ### Included Configurations
+
+            | Config | Architecture | Description |
+            |--------|-------------|-------------|
+            | server | x86_64 | High-performance server |
+            | virt | x86_64 | Virtualization (KVM/Xen) |
+            | embedded | ARM64 | Embedded systems |
+            | riscv | RISC-V | RISC-V architecture |
+
+            ### Package Contents (per tar.gz)
+            - `boot/vmlinux` or `boot/vmlinuz` - Kernel image
+            - `boot/config` - Kernel configuration
+            - `modules/` - Kernel modules
+
+            ### License
+            - **Configuration files**: MIT License
+            - **Compiled kernel**: GPLv2 (same as Linux kernel)
+          files: |
+            output/kernel-${{ inputs.kernel_version }}-server-x86_64.tar.gz
+            output/kernel-${{ inputs.kernel_version }}-virt-x86_64.tar.gz
+            output/kernel-${{ inputs.kernel_version }}-embedded-arm64.tar.gz
+            output/kernel-${{ inputs.kernel_version }}-riscv-rv64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-single:
+    if: inputs.build_all == false
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -70,6 +248,11 @@ jobs:
         run: |
           sudo apt-get install -y gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
 
+      - name: Install ARM64 cross-compiler
+        if: inputs.config_type == 'embedded'
+        run: |
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
       - name: Build kernel (server/virt)
         if: inputs.config_type == 'server' || inputs.config_type == 'virt'
         run: |
@@ -80,7 +263,7 @@ jobs:
         if: inputs.config_type == 'embedded'
         run: |
           cd linux-${{ inputs.kernel_version }}
-          make -j$(nproc) KALLSYMS_ENABLED=1 Image
+          make -j$(nproc) KALLSYMS_ENABLED=1 CROSS_COMPILE=aarch64-linux-gnu- Image
 
       - name: Build kernel (riscv - RISC-V)
         if: inputs.config_type == 'riscv'
@@ -97,34 +280,75 @@ jobs:
         run: |
           mkdir -p modules/lib/modules/${{ inputs.kernel_version }}-${{ inputs.config_type }}
           cd linux-${{ inputs.kernel_version }}
-          make modules_install INSTALL_MOD_PATH=../modules
+          if [ "${{ inputs.config_type }}" == "riscv" ]; then
+            CROSS_COMPILE=riscv64-linux-gnu- make modules_install INSTALL_MOD_PATH=../modules
+          elif [ "${{ inputs.config_type }}" == "embedded" ]; then
+            CROSS_COMPILE=aarch64-linux-gnu- make modules_install INSTALL_MOD_PATH=../modules
+          else
+            make modules_install INSTALL_MOD_PATH=../modules
+          fi
 
       - name: Package kernel
         run: |
           cd linux-${{ inputs.kernel_version }}
-
+          
           # Determine kernel image based on config
           if [ "${{ inputs.config_type }}" = "embedded" ]; then
             KERNEL_IMAGE="arch/arm64/boot/Image"
+            ARCH_NAME="arm64"
           elif [ "${{ inputs.config_type }}" = "riscv" ]; then
             KERNEL_IMAGE="arch/riscv/boot/Image"
+            ARCH_NAME="rv64"
           else
             KERNEL_IMAGE="vmlinux"
-            if [ -f "arch/x86/boot/bzImage" ]; then
-              BZIMAGE="arch/x86/boot/bzImage"
-            fi
+            ARCH_NAME="x86_64"
           fi
-
+          
+          CONFIG_NAME="${{ inputs.config_type }}"
+          
           echo "=== Build Verification ==="
           echo "Kernel image: $KERNEL_IMAGE"
           ls -lh $KERNEL_IMAGE
           file $KERNEL_IMAGE
+          
+          # Create output directory
+          mkdir -p ../output/$CONFIG_NAME-$ARCH_NAME/boot
+          
+          # Copy kernel image
+          if [ "${{ inputs.config_type }}" = "embedded" ]; then
+            cp arch/arm64/boot/Image ../output/$CONFIG_NAME-$ARCH_NAME/boot/vmlinuz
+          elif [ "${{ inputs.config_type }}" = "riscv" ]; then
+            cp arch/riscv/boot/Image ../output/$CONFIG_NAME-$ARCH_NAME/boot/vmlinuz
+          else
+            cp vmlinux ../output/$CONFIG_NAME-$ARCH_NAME/boot/
+            [ -f arch/x86/boot/bzImage ] && cp arch/x86/boot/bzImage ../output/$CONFIG_NAME-$ARCH_NAME/boot/
+          fi
+          
+          # Copy config
+          cp .config ../output/$CONFIG_NAME-$ARCH_NAME/boot/config
+          
+          # Copy modules
+          if [ -d "../modules/lib" ]; then
+            cp -r ../modules/lib ../output/$CONFIG_NAME-$ARCH_NAME/
+          fi
+          
+          # Create tar.gz
+          cd ../output
+          tar -czvf kernel-${{ inputs.kernel_version }}-$CONFIG_NAME-$ARCH_NAME.tar.gz $CONFIG_NAME-$ARCH_NAME/
+          
+          echo "=== Package created ==="
+          ls -lh *.tar.gz
 
-          # Verify config
-          echo ""
-          echo "=== Config Verification ==="
-          grep "CONFIG_LOCALVERSION" .config
-          grep "CONFIG_DEFAULT_HOSTNAME" .config
+      - name: Determine architecture
+        id: arch
+        run: |
+          if [ "${{ inputs.config_type }}" = "embedded" ]; then
+            echo "arch=ARM64" >> $GITHUB_OUTPUT
+          elif [ "${{ inputs.config_type }}" = "riscv" ]; then
+            echo "arch=RISC-V" >> $GITHUB_OUTPUT
+          else
+            echo "arch=x86_64" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -135,48 +359,17 @@ jobs:
             ## Custom Kernel Build
 
             **Version:** ${{ inputs.kernel_version }}-${{ inputs.config_type }}
-            **Architecture:** ${{ inputs.config_type == 'embedded' && 'ARM64' || inputs.config_type == 'riscv' && 'RISC-V' || 'x86_64' }}
+            **Architecture:** ${{ steps.arch.outputs.arch }}
             **Build Date:** ${{ github.run_id }}
 
-            ### Files
-            - `vmlinux` - Kernel ELF image
-            - `.config` - Kernel configuration
+            ### Package Contents
+            - `boot/vmlinux` or `boot/vmlinuz` - Kernel image
+            - `boot/config` - Kernel configuration
+            - `modules/` - Kernel modules
 
             ### License
             - **Configuration files**: MIT License
             - **Compiled kernel**: GPLv2 (same as Linux kernel)
-
-            ### Notes
-            Custom kernel compiled from kernel.org source with ${{ inputs.config_type }} configuration.
-          files: |
-            linux-${{ inputs.kernel_version }}/vmlinux
-            linux-${{ inputs.kernel_version }}/.config
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload bzImage (x86)
-        if: inputs.config_type != 'embedded' && inputs.config_type != 'riscv'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ inputs.kernel_version }}.0-${{ inputs.config_type }}
-          files: linux-${{ inputs.kernel_version }}/arch/x86/boot/bzImage
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload ARM64 Image
-        if: inputs.config_type == 'embedded'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ inputs.kernel_version }}.0-${{ inputs.config_type }}
-          files: linux-${{ inputs.kernel_version }}/arch/arm64/boot/Image
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload RISC-V Image
-        if: inputs.config_type == 'riscv'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ inputs.kernel_version }}.0-${{ inputs.config_type }}
-          files: linux-${{ inputs.kernel_version }}/arch/riscv/boot/Image
+          files: output/kernel-${{ inputs.kernel_version }}-${{ inputs.config_type }}-*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
