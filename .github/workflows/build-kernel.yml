@@ -1,0 +1,213 @@
+name: Build Custom Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      config_type:
+        type: choice
+        description: 'Configuration Type'
+        options:
+          - server
+          - virt
+          - embedded
+      kernel_version:
+        type: string
+        description: 'Kernel Version (e.g., 7.0.1)'
+        default: '7.0.1'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Display selected config
+        run: |
+          echo "Building kernel-${{ inputs.kernel_version }}-${{ inputs.config_type }}"
+          echo "Config file: configs/config-${{ inputs.config_type }}.yml"
+
+      - name: Download kernel source
+        run: |
+          wget -q https://kernel.org/pub/linux/kernel/v7.x/linux-${{ inputs.kernel_version }}.tar.xz
+          tar -xf linux-${{ inputs.kernel_version }}.tar.xz
+          ls -la linux-${{ inputs.kernel_version }}
+
+      - name: Copy configuration
+        run: |
+          cp configs/config-${{ inputs.config_type }}.yml linux-${{ inputs.kernel_version }}/.config
+
+      - name: Apply kernel configuration
+        run: |
+          cd linux-${{ inputs.kernel_version }}
+          make KCONFIG_CONFIG=.config olddefconfig
+          echo "=== Kernel Configuration Applied ==="
+          grep "CONFIG_LOCALVERSION" .config
+          grep "CONFIG_64BIT" .config | head -1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libelf-dev \
+            libssl-dev \
+            libncurses-dev \
+            xz-utils \
+            kmod \
+            cpio \
+            rsync
+
+      - name: Build kernel (server/virt)
+        if: inputs.config_type == 'server' || inputs.config_type == 'virt'
+        run: |
+          cd linux-${{ inputs.kernel_version }}
+          make -j$(nproc) KALLSYMS_ENABLED=1
+
+      - name: Build kernel (embedded - ARM64)
+        if: inputs.config_type == 'embedded'
+        run: |
+          cd linux-${{ inputs.kernel_version }}
+          make -j$(nproc) KALLSYMS_ENABLED=1 Image
+
+      - name: Build modules
+        run: |
+          cd linux-${{ inputs.kernel_version }}
+          make modules -j$(nproc)
+
+      - name: Create modules directory
+        run: |
+          mkdir -p modules/lib/modules/${{ inputs.kernel_version }}-${{ inputs.config_type }}
+          cd linux-${{ inputs.kernel_version }}
+          make modules_install INSTALL_MOD_PATH=../modules
+
+      - name: Package kernel
+        run: |
+          cd linux-${{ inputs.kernel_version }}
+
+          # Determine kernel image based on config
+          if [ "${{ inputs.config_type }}" = "embedded" ]; then
+            KERNEL_IMAGE="arch/arm64/boot/Image"
+          else
+            KERNEL_IMAGE="vmlinux"
+            if [ -f "arch/x86/boot/bzImage" ]; then
+              BZIMAGE="arch/x86/boot/bzImage"
+            fi
+          fi
+
+          echo "=== Build Verification ==="
+          echo "Kernel image: $KERNEL_IMAGE"
+          ls -lh $KERNEL_IMAGE
+          file $KERNEL_IMAGE
+
+          # Verify config
+          echo ""
+          echo "=== Config Verification ==="
+          grep "CONFIG_LOCALVERSION" .config
+          grep "CONFIG_DEFAULT_HOSTNAME" .config
+
+      - name: Create DEB package
+        run: |
+          cd linux-${{ inputs.kernel_version }}
+
+          # Install required packages for packaging
+          sudo apt-get install -y packaging.deb fakeroot
+
+          # Create deb package metadata
+          mkdir -p deb-pkg/DEBIAN
+
+          cat > deb-pkg/DEBIAN/control << EOF
+          Package: linux-kernel-${{ inputs.config_type }}
+          Version: ${{ inputs.kernel_version }}-${{ inputs.config_type }}
+          Section: kernel
+          Priority: optional
+          Architecture: $(uname -m)
+          Description: Custom Linux Kernel ${{ inputs.kernel_version }} (${{ inputs.config_type }})
+           Custom compiled Linux kernel for ${{ inputs.config_type }} workloads.
+          EOF
+
+          # Copy kernel image
+          if [ "${{ inputs.config_type }}" = "embedded" ]; then
+            mkdir -p deb-pkg/boot
+            cp arch/arm64/boot/Image deb-pkg/boot/vmlinuz-${{ inputs.kernel_version }}-${{ inputs.config_type }}
+          else
+            mkdir -p deb-pkg/boot
+            if [ -f "arch/x86/boot/bzImage" ]; then
+              cp arch/x86/boot/bzImage deb-pkg/boot/vmlinuz-${{ inputs.kernel_version }}-${{ inputs.config_type }}
+            fi
+            cp vmlinux deb-pkg/boot/vmlinux-${{ inputs.kernel_version }}-${{ inputs.config_type }}
+          fi
+
+          # Copy config
+          cp .config deb-pkg/boot/config-${{ inputs.kernel_version }}-${{ inputs.config_type }}
+
+          # Copy modules
+          if [ -d "../modules/lib" ]; then
+            cp -r ../modules/lib deb-pkg/
+          fi
+
+          # Build deb
+          cd deb-pkg
+          dpkg-deb --build --root-owner-group .. linux-kernel-${{ inputs.config_type }}_${{ inputs.kernel_version }}-${{ inputs.config_type }}_$(uname -m).deb || true
+          ls -la *.deb 2>/dev/null || echo "DEB build skipped (dpkg-deb may not be available)"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.kernel_version }}.0-${{ inputs.config_type }}
+          name: Kernel v${{ inputs.kernel_version }}.0 (${{ inputs.config_type }})
+          body: |
+            ## Custom Kernel Build
+
+            **Version:** ${{ inputs.kernel_version }}-${{ inputs.config_type }}
+            **Architecture:** ${{ inputs.config_type == 'embedded' && 'ARM64' || 'x86_64' }}
+            **Build Date:** ${{ github.run_id }}
+
+            ### Files
+            - `vmlinux` - Kernel ELF image
+            - `.config` - Kernel configuration
+
+            ### Notes
+            Custom kernel compiled from kernel.org source with ${{ inputs.config_type }} configuration.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: linux-${{ inputs.kernel_version }}/vmlinux
+          asset_name: vmlinux-${{ inputs.config_type }}
+          asset_content_type: application/octet-stream
+
+      - name: Upload config
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: linux-${{ inputs.kernel_version }}/.config
+          asset_name: config-${{ inputs.config_type }}
+          asset_content_type: text/plain
+
+      - name: Upload bzImage (x86)
+        if: inputs.config_type != 'embedded' && hashFiles('linux-**/arch/x86/boot/bzImage')
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: linux-${{ inputs.kernel_version }}/arch/x86/boot/bzImage
+          asset_name: bzImage-${{ inputs.config_type }}
+          asset_content_type: application/octet-stream
+
+      - name: Upload ARM64 Image
+        if: inputs.config_type == 'embedded' && hashFiles('linux-**/arch/arm64/boot/Image')
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: linux-${{ inputs.kernel_version }}/arch/arm64/boot/Image
+          asset_name: Image-${{ inputs.config_type }}
+          asset_content_type: application/octet-stream
