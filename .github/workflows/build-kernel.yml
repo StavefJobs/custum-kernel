@@ -118,16 +118,23 @@ jobs:
           # ============================================
           echo "=== Building embedded (ARM64) ==="
           make clean 2>/dev/null || true
-          cp ../configs/config-embedded.yml .config
+          
+          # Use defconfig first to set up ARM64 base config
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+          
+          # Merge custom config on top
+          cat ../configs/config-embedded.yml >> .config
           make KCONFIG_CONFIG=.config olddefconfig
-          make -j$(nproc) KALLSYMS_ENABLED=1 CROSS_COMPILE=aarch64-linux-gnu- Image
+          
+          # Build Image
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) KALLSYMS_ENABLED=1 Image
           
           # Package embedded
           mkdir -p ../output/embedded-arm64/boot
           cp arch/arm64/boot/Image ../output/embedded-arm64/boot/vmlinuz
           cp .config ../output/embedded-arm64/boot/config
-          make modules -j$(nproc) CROSS_COMPILE=aarch64-linux-gnu-
-          make modules_install INSTALL_MOD_PATH=../modules-embedded CROSS_COMPILE=aarch64-linux-gnu-
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules -j$(nproc)
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_install INSTALL_MOD_PATH=../modules-embedded
           cp -r ../modules-embedded/lib/modules ../output/embedded-arm64/
           rm -rf ../modules-embedded
           
@@ -141,16 +148,23 @@ jobs:
           # ============================================
           echo "=== Building riscv (RISC-V) ==="
           make clean 2>/dev/null || true
-          cp ../configs/config-riscv.yml .config
+          
+          # Use defconfig first to set up RISC-V base config
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          
+          # Merge custom config on top
+          cat ../configs/config-riscv.yml >> .config
           make KCONFIG_CONFIG=.config olddefconfig
-          make -j$(nproc) KALLSYMS_ENABLED=1 CROSS_COMPILE=riscv64-linux-gnu- Image
+          
+          # Build Image
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) KALLSYMS_ENABLED=1 Image
           
           # Package riscv
           mkdir -p ../output/riscv-rv64/boot
           cp arch/riscv/boot/Image ../output/riscv-rv64/boot/vmlinuz
           cp .config ../output/riscv-rv64/boot/config
-          make modules -j$(nproc) CROSS_COMPILE=riscv64-linux-gnu-
-          CROSS_COMPILE=riscv64-linux-gnu- make modules_install INSTALL_MOD_PATH=../modules-riscv
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- modules -j$(nproc)
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- modules_install INSTALL_MOD_PATH=../modules-riscv
           cp -r ../modules-riscv/lib/modules ../output/riscv-rv64/
           rm -rf ../modules-riscv
           
@@ -267,30 +281,64 @@ jobs:
         if: inputs.config_type == 'embedded'
         run: |
           cd linux-${{ inputs.kernel_version }}
-          make -j$(nproc) KALLSYMS_ENABLED=1 CROSS_COMPILE=aarch64-linux-gnu- Image
+          # Use defconfig first for ARM64
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+          # Merge custom config
+          cat ../configs/config-embedded.yml >> .config
+          make KCONFIG_CONFIG=.config olddefconfig
+          # Build Image
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) KALLSYMS_ENABLED=1 Image
 
       - name: Build kernel (riscv - RISC-V)
         if: inputs.config_type == 'riscv'
         run: |
           cd linux-${{ inputs.kernel_version }}
-          make -j$(nproc) KALLSYMS_ENABLED=1 CROSS_COMPILE=riscv64-linux-gnu- Image
+          # Use defconfig first for RISC-V
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- defconfig
+          # Merge custom config
+          cat ../configs/config-riscv.yml >> .config
+          make KCONFIG_CONFIG=.config olddefconfig
+          # Build Image
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc) KALLSYMS_ENABLED=1 Image
 
-      - name: Build modules
+      - name: Build modules (server/virt)
+        if: inputs.config_type == 'server' || inputs.config_type == 'virt'
         run: |
           cd linux-${{ inputs.kernel_version }}
           make modules -j$(nproc)
 
-      - name: Create modules directory
+      - name: Build modules (ARM64)
+        if: inputs.config_type == 'embedded'
+        run: |
+          cd linux-${{ inputs.kernel_version }}
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules -j$(nproc)
+
+      - name: Build modules (RISC-V)
+        if: inputs.config_type == 'riscv'
+        run: |
+          cd linux-${{ inputs.kernel_version }}
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- modules -j$(nproc)
+
+      - name: Create modules directory (server/virt)
+        if: inputs.config_type == 'server' || inputs.config_type == 'virt'
         run: |
           mkdir -p modules/lib/modules/${{ inputs.kernel_version }}-${{ inputs.config_type }}
           cd linux-${{ inputs.kernel_version }}
-          if [ "${{ inputs.config_type }}" == "riscv" ]; then
-            CROSS_COMPILE=riscv64-linux-gnu- make modules_install INSTALL_MOD_PATH=../modules
-          elif [ "${{ inputs.config_type }}" == "embedded" ]; then
-            CROSS_COMPILE=aarch64-linux-gnu- make modules_install INSTALL_MOD_PATH=../modules
-          else
-            make modules_install INSTALL_MOD_PATH=../modules
-          fi
+          make modules_install INSTALL_MOD_PATH=../modules
+
+      - name: Create modules directory (ARM64)
+        if: inputs.config_type == 'embedded'
+        run: |
+          mkdir -p modules/lib/modules/${{ inputs.kernel_version }}-${{ inputs.config_type }}
+          cd linux-${{ inputs.kernel_version }}
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_install INSTALL_MOD_PATH=../modules
+
+      - name: Create modules directory (RISC-V)
+        if: inputs.config_type == 'riscv'
+        run: |
+          mkdir -p modules/lib/modules/${{ inputs.kernel_version }}-${{ inputs.config_type }}
+          cd linux-${{ inputs.kernel_version }}
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- modules_install INSTALL_MOD_PATH=../modules
 
       - name: Package kernel
         run: |
